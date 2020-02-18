@@ -26,6 +26,7 @@ class CorefModel(object):
     self.char_embedding_size = config["char_embedding_size"]
     self.char_dict = util.load_char_dict(config["char_vocab_path"])
     self.max_span_width = config["max_span_width"]
+    self.use_gold_boundaries = config["use_gold_boundaries"]
     self.genres = { g:i for i,g in enumerate(config["genres"]) }
     if config["lm_path"]:
       self.lm_file = h5py.File(self.config["lm_path"], "r")
@@ -69,6 +70,19 @@ class CorefModel(object):
     }
     optimizer = optimizers[self.config["optimizer"]](learning_rate)
     self.train_op = optimizer.apply_gradients(zip(gradients, trainable_params), global_step=self.global_step)
+
+  def _modify_clusters(self, clusters):
+    new_clusters = []
+    for cluster in clusters:
+      new_cluster = []
+      for start, end in cluster:
+        if end - start >= self.max_span_width:
+          continue
+        else:
+          new_cluster.append([start, end])
+      if new_cluster:
+        new_clusters.append(new_cluster)
+    return new_clusters
 
   def start_enqueue_thread(self, session):
     with open(self.config["train_path"]) as f:
@@ -122,6 +136,9 @@ class CorefModel(object):
   def tensorize_example(self, example, is_training):
     clusters = example["clusters"]
 
+    if self.use_gold_boundaries:
+      clusters = self._modify_clusters(clusters)
+
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
     cluster_ids = np.zeros(len(gold_mentions))
@@ -154,7 +171,7 @@ class CorefModel(object):
     speaker_ids = np.array([speaker_dict[s] for s in speakers])
 
     doc_key = example["doc_key"]
-    genre = self.genres[doc_key[:2]]
+    genre = self.genres["bn"]
 
     gold_starts, gold_ends = self.tensorize_mentions(gold_mentions)
 
@@ -282,8 +299,13 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-    candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
-    candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
+    if self.use_gold_boundaries:
+      candidate_starts = tf.expand_dims(gold_starts, 1)
+      candidate_ends = tf.expand_dims(gold_ends, 1)
+    else:
+      candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
+      candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
+
     candidate_start_sentence_indices = tf.gather(flattened_sentence_indices, candidate_starts) # [num_words, max_span_width]
     candidate_end_sentence_indices = tf.gather(flattened_sentence_indices, tf.minimum(candidate_ends, num_words - 1)) # [num_words, max_span_width]
     candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices, candidate_end_sentence_indices)) # [num_words, max_span_width]
@@ -298,13 +320,18 @@ class CorefModel(object):
     candidate_mention_scores =  self.get_mention_scores(candidate_span_emb) # [k, 1]
     candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1) # [k]
 
-    k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
-    top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
-                                               tf.expand_dims(candidate_starts, 0),
-                                               tf.expand_dims(candidate_ends, 0),
-                                               tf.expand_dims(k, 0),
-                                               util.shape(context_outputs, 0),
-                                               True) # [1, k]
+
+    if self.use_gold_boundaries:
+      k = tf.shape(candidate_starts)[0]
+      top_span_indices = tf.expand_dims(tf.range(k), 0)
+    else:
+      k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
+      top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
+                                                 tf.expand_dims(candidate_starts, 0),
+                                                 tf.expand_dims(candidate_ends, 0),
+                                                 tf.expand_dims(k, 0),
+                                                 util.shape(context_outputs, 0),
+                                                 True) # [1, k]
     top_span_indices.set_shape([1, None])
     top_span_indices = tf.squeeze(top_span_indices, 0) # [k]
 
