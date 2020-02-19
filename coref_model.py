@@ -134,7 +134,7 @@ class CorefModel(object):
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
 
   def tensorize_example(self, example, is_training):
-    clusters = example["clusters"]
+    clusters = example["candidate_clusters"]
 
     if self.use_gold_boundaries:
       clusters = self._modify_clusters(clusters)
@@ -300,8 +300,9 @@ class CorefModel(object):
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
     if self.use_gold_boundaries:
-      candidate_starts = tf.expand_dims(gold_starts, 1)
-      candidate_ends = tf.expand_dims(gold_ends, 1)
+      candidate_starts = tf.transpose(tf.expand_dims(gold_starts, 1))
+      candidate_ends = tf.transpose(tf.expand_dims(gold_ends, 1))
+
     else:
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
       candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
@@ -536,14 +537,14 @@ class CorefModel(object):
         predicted_cluster = len(predicted_clusters)
         predicted_clusters.append([predicted_antecedent])
         mention_to_predicted[predicted_antecedent] = predicted_cluster
-
+      
       mention = (int(top_span_starts[i]), int(top_span_ends[i]))
       predicted_clusters[predicted_cluster].append(mention)
       mention_to_predicted[mention] = predicted_cluster
 
     predicted_clusters = [tuple(pc) for pc in predicted_clusters]
     mention_to_predicted = { m:predicted_clusters[i] for m,i in mention_to_predicted.items() }
-
+      
     return predicted_clusters, mention_to_predicted
 
   def evaluate_coref(self, top_span_starts, top_span_ends, predicted_antecedents, gold_clusters, evaluator):
@@ -572,6 +573,8 @@ class CorefModel(object):
 
     coref_predictions = {}
     coref_evaluator = metrics.CorefEvaluator()
+
+    print(self.eval_data[0])
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
       _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
