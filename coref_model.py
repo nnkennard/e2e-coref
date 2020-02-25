@@ -26,7 +26,7 @@ class CorefModel(object):
     self.char_embedding_size = config["char_embedding_size"]
     self.char_dict = util.load_char_dict(config["char_vocab_path"])
     self.max_span_width = config["max_span_width"]
-    self.use_gold_boundaries = config["use_gold_boundaries"]
+    self.inject_mentions = config["inject_mentions"]
     self.genres = { g:i for i,g in enumerate(config["genres"]) }
     if config["lm_path"]:
       self.lm_file = h5py.File(self.config["lm_path"], "r")
@@ -134,10 +134,9 @@ class CorefModel(object):
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
 
   def tensorize_example(self, example, is_training):
-    clusters = example["candidate_clusters"]
 
-    if self.use_gold_boundaries:
-      clusters = self._modify_clusters(clusters)
+    clusters = example["clusters"]
+    injected_mentions = self._modify_clusters(example["candidate_mentions"])
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -171,13 +170,18 @@ class CorefModel(object):
     speaker_ids = np.array([speaker_dict[s] for s in speakers])
 
     doc_key = example["doc_key"]
-    genre = self.genres["bn"]
+    genre = self.genres[doc_key[:2]]
 
     gold_starts, gold_ends = self.tensorize_mentions(gold_mentions)
+    starts_to_inject, ends_to_inject = self.tensorize_mentions(
+                                            injected_mentions)
 
     lm_emb = self.load_lm_embeddings(doc_key)
 
-    example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids)
+    example_tensors = (
+      tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len,
+      speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,
+      starts_to_inject, ends_to_inject)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
       return self.truncate_example(*example_tensors)
@@ -244,7 +248,10 @@ class CorefModel(object):
     top_fast_antecedent_scores += tf.log(tf.to_float(top_antecedents_mask)) # [k, c]
     return top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets
 
-  def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids):
+  def get_predictions_and_loss(
+      self, tokens, context_word_emb, head_word_emb, lm_emb, char_index,
+      text_len, speaker_ids, genre, is_training, gold_starts, gold_ends,
+      cluster_ids, starts_to_inject=None, ends_to_inject=None):
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -299,9 +306,9 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-    if self.use_gold_boundaries:
-      candidate_starts = tf.transpose(tf.expand_dims(gold_starts, 1))
-      candidate_ends = tf.transpose(tf.expand_dims(gold_ends, 1))
+    if self.inject_mentions:
+      candidate_starts = tf.transpose(tf.expand_dims(starts_to_inject, 1))
+      candidate_ends = tf.transpose(tf.expand_dims(ends_to_inject, 1))
 
     else:
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
