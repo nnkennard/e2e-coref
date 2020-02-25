@@ -49,6 +49,8 @@ class CorefModel(object):
     input_props.append((tf.int32, [None])) # Gold starts.
     input_props.append((tf.int32, [None])) # Gold ends.
     input_props.append((tf.int32, [None])) # Cluster ids.
+    input_props.append((tf.int32, [None])) # Injected starts.
+    input_props.append((tf.int32, [None])) # Injected ends.
 
     self.queue_input_tensors = [tf.placeholder(dtype, shape) for dtype, shape in input_props]
     dtypes, shapes = zip(*input_props)
@@ -82,7 +84,10 @@ class CorefModel(object):
           new_cluster.append([start, end])
       if new_cluster:
         new_clusters.append(new_cluster)
-    return new_clusters
+    if new_clusters:
+      return new_clusters
+    else:  
+      return [[]]
 
   def start_enqueue_thread(self, session):
     with open(self.config["train_path"]) as f:
@@ -136,7 +141,8 @@ class CorefModel(object):
   def tensorize_example(self, example, is_training):
 
     clusters = example["clusters"]
-    injected_mentions = self._modify_clusters(example["candidate_mentions"])
+    injected_mentions = self._modify_clusters([example["additional_mentions"]])[0]
+    #TODO: Fix if original modify clusters isn't needed
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -251,7 +257,7 @@ class CorefModel(object):
   def get_predictions_and_loss(
       self, tokens, context_word_emb, head_word_emb, lm_emb, char_index,
       text_len, speaker_ids, genre, is_training, gold_starts, gold_ends,
-      cluster_ids, starts_to_inject=None, ends_to_inject=None):
+      cluster_ids, starts_to_inject, ends_to_inject):
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -329,7 +335,7 @@ class CorefModel(object):
     candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1) # [k]
 
 
-    if self.use_gold_boundaries:
+    if self.inject_mentions:
       k = tf.shape(candidate_starts)[0]
       top_span_indices = tf.expand_dims(tf.range(k), 0)
     else:
@@ -581,10 +587,9 @@ class CorefModel(object):
     coref_predictions = {}
     coref_evaluator = metrics.CorefEvaluator()
 
-    print(self.eval_data[0])
-
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
-      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
+      (_, _, _, _, _, _, _, _, _,
+        gold_starts, gold_ends, _, _, _)= tensorized_example
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
