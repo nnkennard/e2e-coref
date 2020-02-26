@@ -144,6 +144,9 @@ class CorefModel(object):
     injected_mentions = self._modify_clusters([example["additional_mentions"]])[0]
     #TODO: Fix if original modify clusters isn't needed
 
+    print("injected mentions")
+    print(sorted(injected_mentions))
+
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
     cluster_ids = np.zeros(len(gold_mentions))
@@ -182,6 +185,8 @@ class CorefModel(object):
     starts_to_inject, ends_to_inject = self.tensorize_mentions(
                                             injected_mentions)
 
+    print(starts_to_inject.shape, ends_to_inject.shape)
+
     lm_emb = self.load_lm_embeddings(doc_key)
 
     example_tensors = (
@@ -190,6 +195,7 @@ class CorefModel(object):
       starts_to_inject, ends_to_inject)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
+      raise NotImplementedError
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
@@ -320,6 +326,9 @@ class CorefModel(object):
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
       candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
 
+    print(candidate_starts)
+    print(candidate_ends)
+
     candidate_start_sentence_indices = tf.gather(flattened_sentence_indices, candidate_starts) # [num_words, max_span_width]
     candidate_end_sentence_indices = tf.gather(flattened_sentence_indices, tf.minimum(candidate_ends, num_words - 1)) # [num_words, max_span_width]
     candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices, candidate_end_sentence_indices)) # [num_words, max_span_width]
@@ -387,6 +396,7 @@ class CorefModel(object):
     top_antecedent_labels = tf.concat([dummy_labels, pairwise_labels], 1) # [k, c + 1]
     loss = self.softmax_loss(top_antecedent_scores, top_antecedent_labels) # [k]
     loss = tf.reduce_sum(loss) # []
+    print("loss", loss)
 
     return [candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores], loss
 
@@ -568,6 +578,8 @@ class CorefModel(object):
         mention_to_gold[mention] = gc
 
     predicted_clusters, mention_to_predicted = self.get_predicted_clusters(top_span_starts, top_span_ends, predicted_antecedents)
+    print("predicted clusters", predicted_clusters)
+    print("gold clusters", gold_clusters)
     evaluator.update(predicted_clusters, gold_clusters, mention_to_predicted, mention_to_gold)
     return predicted_clusters
 
@@ -593,6 +605,7 @@ class CorefModel(object):
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
+      print(example_num, predicted_antecedents)
       coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
       if example_num % 10 == 0:
         print("Evaluated {}/{} examples.".format(example_num + 1, len(self.eval_data)))
