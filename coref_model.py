@@ -264,19 +264,27 @@ class CorefModel(object):
           tf.get_variable(
               "char_embeddings",
               [len(self.char_dict), self.config["char_embedding_size"]]),
-          char_index) # [num_sentences, max_sentence_length, max_word_length, emb]
+          char_index)
+      # [num_sentences, max_sentence_length, max_word_length, emb]
+
       flattened_char_emb = tf.reshape(
           char_emb, [
               num_sentences * max_sentence_length,
               util.shape(char_emb, 2),
-              util.shape(char_emb, 3)]) # [num_sentences * max_sentence_length, max_word_length, emb]
+              util.shape(char_emb, 3)])
+      # [num_sentences * max_sentence_length, max_word_length, emb]
+
       flattened_aggregated_char_emb = util.cnn(
           flattened_char_emb, self.config["filter_widths"],
-          self.config["filter_size"]) # [num_sentences * max_sentence_length, emb]
+          self.config["filter_size"])
+      # [num_sentences * max_sentence_length, emb]
+
       aggregated_char_emb = tf.reshape(
           flattened_aggregated_char_emb,
           [num_sentences, max_sentence_length,
-           util.shape(flattened_aggregated_char_emb, 1)]) # [num_sentences, max_sentence_length, emb]
+           util.shape(flattened_aggregated_char_emb, 1)])
+      # [num_sentences, max_sentence_length, emb]
+
       context_emb_list.append(aggregated_char_emb)
       head_emb_list.append(aggregated_char_emb)
 
@@ -285,10 +293,14 @@ class CorefModel(object):
       lm_embeddings = elmo_module(
           inputs={"tokens": tokens, "sequence_len": text_len},
           signature="tokens", as_dict=True)
-      word_emb = lm_embeddings["word_emb"]  # [num_sentences, max_sentence_length, 512]
+      word_emb = lm_embeddings["word_emb"] 
+      # [num_sentences, max_sentence_length, 512]
+
       lm_emb = tf.stack([tf.concat([word_emb, word_emb], -1),
                          lm_embeddings["lstm_outputs1"],
-                         lm_embeddings["lstm_outputs2"]], -1)  # [num_sentences, max_sentence_length, 1024, 3]
+                         lm_embeddings["lstm_outputs2"]], -1)
+      # [num_sentences, max_sentence_length, 1024, 3]
+
     lm_emb_size = util.shape(lm_emb, 2)
     lm_num_layers = util.shape(lm_emb, 3)
     with tf.variable_scope("lm_aggregation"):
