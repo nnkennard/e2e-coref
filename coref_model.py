@@ -405,7 +405,8 @@ class CorefModel(object):
       k = tf.shape(candidate_starts)[0]
       top_span_indices = tf.expand_dims(tf.range(k), 0)
     else:
-      k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
+      k = tf.to_int32(tf.floor(tf.to_float(
+          tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
       top_span_indices = coref_ops.extract_spans(
           tf.expand_dims(candidate_mention_scores, 0),
           tf.expand_dims(candidate_starts, 0),
@@ -429,12 +430,17 @@ class CorefModel(object):
 
     c = tf.minimum(self.config["max_top_antecedents"], k)
 
+    intermediate_mentions = []
+
     if self.config["coarse_to_fine"]:
       (top_antecedents, top_antecedents_mask,
        top_fast_antecedent_scores,
        top_antecedent_offsets) = self.coarse_to_fine_pruning(
           top_span_emb, top_span_mention_scores, c)
+      intermediate_mentions.append(
+        (top_antecedents, top_fast_antecedent_scores))
     else:
+      raise NotImplementedError
       (top_antecedents, top_antecedents_mask,
        top_fast_antecedent_scores,
        top_antecedent_offsets) = self.distance_pruning(
@@ -471,6 +477,8 @@ class CorefModel(object):
     top_antecedent_scores = tf.concat(
         [dummy_scores, top_antecedent_scores], 1) # [k, c + 1]
 
+    intermediate_mentions.append(
+        (top_antecedents, top_fast_antecedent_scores))
     top_antecedent_cluster_ids = tf.gather(
         top_span_cluster_ids, top_antecedents) # [k, c]
     top_antecedent_cluster_ids += tf.to_int32(
@@ -492,7 +500,7 @@ class CorefModel(object):
     return [
         candidate_starts, candidate_ends, candidate_mention_scores,
         top_span_starts, top_span_ends, top_antecedents,
-        top_antecedent_scores], loss
+        top_antecedent_scores, intermediate_mentions], loss
 
   def get_span_emb(self, head_emb, context_outputs, span_starts, span_ends):
     span_emb_list = []
@@ -695,7 +703,13 @@ class CorefModel(object):
       (_, _, _, _, _, _, _, _, _,
         gold_starts, gold_ends, _, _, _)= tensorized_example
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
-      candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
+      candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores, ants_and_scores = session.run(self.predictions, feed_dict=feed_dict)
+
+      cols = print_preds(example, top_span_starts, top_span_ends, ants_and_scores)
+      for i, row in enumerate(zip(*cols)):
+        print("\t".join(str(j) for j in ["ant", i] + list(row)))
+      print()
+
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
       coref_predictions[example["doc_key"]] = self.evaluate_coref(top_span_starts, top_span_ends, predicted_antecedents, example["clusters"], coref_evaluator)
       if example_num % 10 == 0:
@@ -716,3 +730,16 @@ class CorefModel(object):
     print("Average recall (py): {:.2f}%".format(r * 100))
 
     return util.make_summary(summary_dict), average_f1
+
+def print_preds(example, top_span_starts, top_span_ends, ants_and_scores):
+  cols = [
+      [example["doc_key"]] * len(top_span_starts),
+      list(np.array(top_span_starts)), list(np.array(top_span_ends))]
+  for ants, scores in ants_and_scores:
+    ant_col = []
+    score_col = []
+    for i in range(len(top_span_starts)):
+       ant_col.append(ants[i][np.argmax(scores,1)[i]])
+       score_col.append(scores[i][np.argmax(scores,1)[i]])
+    cols += [ant_col, score_col]
+  return cols
