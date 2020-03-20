@@ -130,7 +130,8 @@ class CorefModel(object):
   def tensorize_example(self, example, is_training):
 
     clusters = example["clusters"]
-    injected_mentions = self._filter_mentions(example["additional_mentions"])
+    #injected_mentions = self._filter_mentions(example["additional_mentions"])
+    injected_mentions = []
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -178,12 +179,11 @@ class CorefModel(object):
       starts_to_inject, ends_to_inject)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
-      raise NotImplementedError
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
 
-  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids):
+  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, starts_to_inject, ends_to_inject):
     max_training_sentences = self.config["max_training_sentences"]
     num_sentences = context_word_emb.shape[0]
     assert num_sentences > max_training_sentences
@@ -204,7 +204,12 @@ class CorefModel(object):
     gold_ends = gold_ends[gold_spans] - word_offset
     cluster_ids = cluster_ids[gold_spans]
 
-    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids
+    inject_spans = np.logical_and(ends_to_inject >= word_offset,
+                                  starts_to_inject < word_offset + num_words)
+    starts_to_inject = starts_to_inject[inject_spans] - word_offset
+    ends_to_inject = ends_to_inject[inject_spans] - word_offset
+
+    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, starts_to_inject, ends_to_inject
 
   def get_candidate_labels(self, candidate_starts, candidate_ends, labeled_starts, labeled_ends, labels):
     same_start = tf.equal(tf.expand_dims(labeled_starts, 1), tf.expand_dims(candidate_starts, 0)) # [num_labeled, num_candidates]

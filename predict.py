@@ -29,7 +29,15 @@ if __name__ == "__main__":
           example = json.loads(line)
           tensorized_example = model.tensorize_example(example, is_training=False)
           feed_dict = {i:t for i,t in zip(model.input_tensors, tensorized_example)}
-          _, _, _, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(model.predictions, feed_dict=feed_dict)
+          (_, _, _, top_span_starts, top_span_ends, top_antecedents,
+              top_antecedent_scores, ants_and_scores) = session.run(
+                  model.predictions, feed_dict=feed_dict)
+
+          cols = cm.print_preds(example, top_span_starts, top_span_ends, ants_and_scores)
+          for i, row in enumerate(zip(*cols)):
+            print("\t".join(str(j) for j in ["ant", i] + list(row)))
+          print()
+
           predicted_antecedents = model.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
           example["predicted_clusters"], _ = model.get_predicted_clusters(top_span_starts, top_span_ends, predicted_antecedents)
 
