@@ -25,19 +25,26 @@ if __name__ == "__main__":
   max_f1 = 0
 
   with tf.Session() as session:
+    #print("a" * 80)
     session.run(tf.global_variables_initializer())
     model.start_enqueue_thread(session)
     accumulated_loss = 0.0
+    #print("b" * 80)
 
     ckpt = tf.train.get_checkpoint_state(log_dir)
     if ckpt and ckpt.model_checkpoint_path:
-      print("Restoring from: {}".format(ckpt.model_checkpoint_path))
+      #print("Restoring from: {}".format(ckpt.model_checkpoint_path))
       saver.restore(session, ckpt.model_checkpoint_path)
 
+    #print("c" * 80)
     initial_time = time.time()
+    i = 0
     while True:
+      #print("*", i)
+      i += 1
       tf_loss, tf_global_step, _ = session.run([model.loss, model.global_step, model.train_op])
       accumulated_loss += tf_loss
+      #print(tf_global_step)
 
       if tf_global_step % report_frequency == 0:
         total_time = time.time() - initial_time
