@@ -85,10 +85,6 @@ class CorefModel(object):
         for example in train_examples:
           tensorized_example = self.tensorize_example(example, is_training=True)
           feed_dict = dict(zip(self.queue_input_tensors, tensorized_example))
-
-
-          #print(feed_dict)
-
           session.run(self.enqueue_op, feed_dict=feed_dict)
     enqueue_thread = threading.Thread(target=_enqueue_loop)
     enqueue_thread.daemon = True
@@ -135,14 +131,12 @@ class CorefModel(object):
             if end - start < self.max_span_width ]
 
   def _use_injected_mentions(self, is_training):
-    #print(is_training, type(is_training))
     if type(is_training) == bool or is_training is not None:
       return self.train_inject
     else:
       return self.infer_inject
 
   def tensorize_example(self, example, is_training):
-    #print(is_training, type(is_training))
     clusters = example["clusters"]
 
     injected_mentions = self._filter_mentions(example["inject_mentions"])
@@ -219,7 +213,7 @@ class CorefModel(object):
 
     cluster_ids = cluster_ids[gold_spans]
 
-    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, inject_starts, inject_ends, cluster_ids
+    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends
 
   def get_candidate_labels(self, candidate_starts, candidate_ends, labeled_starts, labeled_ends, labels):
     same_start = tf.equal(tf.expand_dims(labeled_starts, 1), tf.expand_dims(candidate_starts, 0)) # [num_labeled, num_candidates]
@@ -591,7 +585,7 @@ class CorefModel(object):
     coref_evaluator = metrics.CorefEvaluator()
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
-      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
+      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _, _, _ = tensorized_example
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
