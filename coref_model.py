@@ -178,7 +178,6 @@ class CorefModel(object):
       starts_to_inject, ends_to_inject)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
-      raise NotImplementedError
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
@@ -202,9 +201,14 @@ class CorefModel(object):
     gold_spans = np.logical_and(gold_ends >= word_offset, gold_starts < word_offset + num_words)
     gold_starts = gold_starts[gold_spans] - word_offset
     gold_ends = gold_ends[gold_spans] - word_offset
+    
+    inject_spans = np.logical_and(inject_ends >= word_offset, inject_starts < word_offset + num_words)
+    inject_starts = inject_starts[inject_spans] - word_offset
+    inject_ends = inject_ends[inject_spans] - word_offset
+
     cluster_ids = cluster_ids[gold_spans]
 
-    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids
+    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends
 
   def get_candidate_labels(self, candidate_starts, candidate_ends, labeled_starts, labeled_ends, labels):
     same_start = tf.equal(tf.expand_dims(labeled_starts, 1), tf.expand_dims(candidate_starts, 0)) # [num_labeled, num_candidates]
