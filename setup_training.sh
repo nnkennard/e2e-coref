@@ -9,9 +9,9 @@ dlx() {
 dlx http://conll.cemantix.org/download reference-coreference-scorers.v8.01.tar.gz
 mv reference-coreference-scorers conll-2012/scorer
 
-cp ~/mention_bottleneck/data/original/conll/conll12_dev.txt dev.english.v4_gold_conll
-cp ~/mention_bottleneck/data/original/conll/conll12_train.txt train.english.v4_gold_conll
-cp ~/mention_bottleneck/data/original/conll/conll12_test.txt test.english.v4_gold_conll
+cp ~/mention_bottleneck/data/original/conll_mult/conll12_dev.txt dev.english.v4_gold_conll
+cp ~/mention_bottleneck/data/original/conll_mult/conll12_train.txt train.english.v4_gold_conll
+cp ~/mention_bottleneck/data/original/conll_mult/conll12_test.txt test.english.v4_gold_conll
 
 python minimize.py
 python get_char_vocab.py

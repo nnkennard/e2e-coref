@@ -26,7 +26,6 @@ class CorefModel(object):
     self.char_embedding_size = config["char_embedding_size"]
     self.char_dict = util.load_char_dict(config["char_vocab_path"])
     self.max_span_width = config["max_span_width"]
-    self.inject_mentions = config["inject_mentions"]
     self.genres = { g:i for i,g in enumerate(config["genres"]) }
     if config["lm_path"]:
       self.lm_file = h5py.File(self.config["lm_path"], "r")
@@ -52,8 +51,6 @@ class CorefModel(object):
     input_props.append((tf.int32, [None])) # Gold starts.
     input_props.append((tf.int32, [None])) # Gold ends.
     input_props.append((tf.int32, [None])) # Cluster ids.
-    input_props.append((tf.int32, [None])) # Injected starts.
-    input_props.append((tf.int32, [None])) # Injected ends.
 
     input_props.append((tf.int32, [None])) # Inject starts.
     input_props.append((tf.int32, [None])) # Inject ends.
@@ -63,6 +60,9 @@ class CorefModel(object):
     queue = tf.PaddingFIFOQueue(capacity=10, dtypes=dtypes, shapes=shapes)
     self.enqueue_op = queue.enqueue(self.queue_input_tensors)
     self.input_tensors = queue.dequeue()
+    
+    print(self.input_tensors)
+    print(len(self.input_tensors))
 
     self.predictions, self.loss = self.get_predictions_and_loss(*self.input_tensors)
     self.global_step = tf.Variable(0, name="global_step", trainable=False)
@@ -147,7 +147,6 @@ class CorefModel(object):
   def tensorize_example(self, example, is_training):
 
     clusters = example["clusters"]
-    injected_mentions = self._filter_mentions(example["additional_mentions"])
 
     injected_mentions = self._filter_mentions(example["inject_mentions"])
     inject_starts, inject_ends = self.tensorize_mentions(injected_mentions)
