@@ -36,6 +36,9 @@ class CorefModel(object):
     self.lm_size = self.config["lm_size"]
     self.eval_data = None # Load eval data lazily.
 
+    self.train_inject = self.config["train_inject"]
+    self.infer_inject = self.config["infer_inject"]
+
     input_props = []
     input_props.append((tf.string, [None, None])) # Tokens.
     input_props.append((tf.float32, [None, None, self.context_embeddings.size])) # Context embeddings.
@@ -51,6 +54,9 @@ class CorefModel(object):
     input_props.append((tf.int32, [None])) # Cluster ids.
     input_props.append((tf.int32, [None])) # Injected starts.
     input_props.append((tf.int32, [None])) # Injected ends.
+
+    input_props.append((tf.int32, [None])) # Inject starts.
+    input_props.append((tf.int32, [None])) # Inject ends.
 
     self.queue_input_tensors = [tf.placeholder(dtype, shape) for dtype, shape in input_props]
     dtypes, shapes = zip(*input_props)
@@ -126,11 +132,25 @@ class CorefModel(object):
     else:
       starts, ends, labels = [], [], []
     return np.array(starts), np.array(ends), np.array([label_dict[c] for c in labels])
+  
+  def _filter_mentions(self, mentions):
+    return [(start, end)
+            for (start, end) in mentions
+            if end - start < self.max_span_width ]
+
+  def _use_injected_mentions(self, is_training):
+    if type(is_training) == bool or is_training is not None:
+      return self.train_inject
+    else:
+      return self.infer_inject
 
   def tensorize_example(self, example, is_training):
 
     clusters = example["clusters"]
     injected_mentions = self._filter_mentions(example["additional_mentions"])
+
+    injected_mentions = self._filter_mentions(example["inject_mentions"])
+    inject_starts, inject_ends = self.tensorize_mentions(injected_mentions)
 
     gold_mentions = sorted(tuple(m) for m in util.flatten(clusters))
     gold_mention_map = {m:i for i,m in enumerate(gold_mentions)}
@@ -172,10 +192,7 @@ class CorefModel(object):
 
     lm_emb = self.load_lm_embeddings(doc_key)
 
-    example_tensors = (
-      tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len,
-      speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids,
-      starts_to_inject, ends_to_inject)
+    example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
       raise NotImplementedError
@@ -183,7 +200,7 @@ class CorefModel(object):
     else:
       return example_tensors
 
-  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids):
+  def truncate_example(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends):
     max_training_sentences = self.config["max_training_sentences"]
     num_sentences = context_word_emb.shape[0]
     assert num_sentences > max_training_sentences
@@ -202,9 +219,14 @@ class CorefModel(object):
     gold_spans = np.logical_and(gold_ends >= word_offset, gold_starts < word_offset + num_words)
     gold_starts = gold_starts[gold_spans] - word_offset
     gold_ends = gold_ends[gold_spans] - word_offset
+
+    inject_spans = np.logical_and(inject_ends >= word_offset, inject_starts < word_offset + num_words)
+    inject_starts = inject_starts[inject_spans] - word_offset
+    inject_ends = inject_ends[inject_spans] - word_offset
+
     cluster_ids = cluster_ids[gold_spans]
 
-    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids
+    return tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends
 
   def get_candidate_labels(self, candidate_starts, candidate_ends, labeled_starts, labeled_ends, labels):
     same_start = tf.equal(tf.expand_dims(labeled_starts, 1), tf.expand_dims(candidate_starts, 0)) # [num_labeled, num_candidates]
@@ -243,10 +265,8 @@ class CorefModel(object):
     top_fast_antecedent_scores += tf.log(tf.to_float(top_antecedents_mask)) # [k, c]
     return top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets
 
-  def get_predictions_and_loss(
-      self, tokens, context_word_emb, head_word_emb, lm_emb, char_index,
-      text_len, speaker_ids, genre, is_training, gold_starts, gold_ends,
-      cluster_ids, starts_to_inject, ends_to_inject):
+  def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends):
+
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -301,10 +321,9 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-    if self.inject_mentions:
-      candidate_starts = tf.transpose(tf.expand_dims(starts_to_inject, 1))
-      candidate_ends = tf.transpose(tf.expand_dims(ends_to_inject, 1))
-
+    if self._use_injected_mentions(is_training):
+      candidate_starts = tf.transpose(tf.expand_dims(inject_starts, 1))
+      candidate_ends = tf.transpose(tf.expand_dims(inject_ends, 1))
     else:
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
       candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
@@ -323,18 +342,22 @@ class CorefModel(object):
     candidate_mention_scores =  self.get_mention_scores(candidate_span_emb) # [k, 1]
     candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1) # [k]
 
-
-    if self.inject_mentions:
+    if self._use_injected_mentions(is_training):
       k = tf.shape(candidate_starts)[0]
       top_span_indices = tf.expand_dims(tf.range(k), 0)
     else:
-      k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
-      top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
-                                                 tf.expand_dims(candidate_starts, 0),
-                                                 tf.expand_dims(candidate_ends, 0),
-                                                 tf.expand_dims(k, 0),
-                                                 util.shape(context_outputs, 0),
-                                                 True) # [1, k]
+      k = tf.to_int32(
+          tf.floor(
+          tf.to_float(
+          tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))
+      top_span_indices = coref_ops.extract_spans(
+          tf.expand_dims(candidate_mention_scores, 0),
+          tf.expand_dims(candidate_starts, 0),
+          tf.expand_dims(candidate_ends, 0),
+          tf.expand_dims(k, 0),
+          util.shape(context_outputs, 0),
+          True) # [1, k]
+
     top_span_indices.set_shape([1, None])
     top_span_indices = tf.squeeze(top_span_indices, 0) # [k]
 
@@ -577,8 +600,8 @@ class CorefModel(object):
     coref_evaluator = metrics.CorefEvaluator()
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
-      (_, _, _, _, _, _, _, _, _,
-        gold_starts, gold_ends, _, _, _)= tensorized_example
+      _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _, _, _ = tensorized_example
+
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
