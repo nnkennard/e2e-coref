@@ -26,6 +26,7 @@ class CorefModel(object):
     self.char_embedding_size = config["char_embedding_size"]
     self.char_dict = util.load_char_dict(config["char_vocab_path"])
     self.max_span_width = config["max_span_width"]
+    self.inject_mentions = config["inject_mentions"]
     self.genres = { g:i for i,g in enumerate(config["genres"]) }
     if config["lm_path"]:
       self.lm_file = h5py.File(self.config["lm_path"], "r")
@@ -51,6 +52,8 @@ class CorefModel(object):
     input_props.append((tf.int32, [None])) # Gold starts.
     input_props.append((tf.int32, [None])) # Gold ends.
     input_props.append((tf.int32, [None])) # Cluster ids.
+    input_props.append((tf.int32, [None])) # Injected starts.
+    input_props.append((tf.int32, [None])) # Injected ends.
 
     input_props.append((tf.int32, [None])) # Inject starts.
     input_props.append((tf.int32, [None])) # Inject ends.
@@ -75,6 +78,11 @@ class CorefModel(object):
     }
     optimizer = optimizers[self.config["optimizer"]](learning_rate)
     self.train_op = optimizer.apply_gradients(zip(gradients, trainable_params), global_step=self.global_step)
+
+  def _filter_mentions(self, mentions):
+    return [(start, end)
+            for (start, end) in mentions
+            if end - start < self.max_span_width ]
 
   def start_enqueue_thread(self, session):
     with open(self.config["train_path"]) as f:
@@ -137,7 +145,9 @@ class CorefModel(object):
       return self.infer_inject
 
   def tensorize_example(self, example, is_training):
+
     clusters = example["clusters"]
+    injected_mentions = self._filter_mentions(example["additional_mentions"])
 
     injected_mentions = self._filter_mentions(example["inject_mentions"])
     inject_starts, inject_ends = self.tensorize_mentions(injected_mentions)
@@ -177,12 +187,15 @@ class CorefModel(object):
     genre = self.genres[doc_key[:2]]
 
     gold_starts, gold_ends = self.tensorize_mentions(gold_mentions)
+    starts_to_inject, ends_to_inject = self.tensorize_mentions(
+                                            injected_mentions)
 
     lm_emb = self.load_lm_embeddings(doc_key)
 
     example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends)
 
     if is_training and len(sentences) > self.config["max_training_sentences"]:
+      raise NotImplementedError
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
@@ -253,6 +266,7 @@ class CorefModel(object):
     return top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets
 
   def get_predictions_and_loss(self, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids, inject_starts, inject_ends):
+
     self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
     self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
     self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
@@ -307,13 +321,13 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
-
     if self._use_injected_mentions(is_training):
       candidate_starts = tf.transpose(tf.expand_dims(inject_starts, 1))
       candidate_ends = tf.transpose(tf.expand_dims(inject_ends, 1))
     else:
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1), [1, self.max_span_width]) # [num_words, max_span_width]
       candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width), 0) # [num_words, max_span_width]
+
     candidate_start_sentence_indices = tf.gather(flattened_sentence_indices, candidate_starts) # [num_words, max_span_width]
     candidate_end_sentence_indices = tf.gather(flattened_sentence_indices, tf.minimum(candidate_ends, num_words - 1)) # [num_words, max_span_width]
     candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices, candidate_end_sentence_indices)) # [num_words, max_span_width]
@@ -343,6 +357,7 @@ class CorefModel(object):
           tf.expand_dims(k, 0),
           util.shape(context_outputs, 0),
           True) # [1, k]
+
     top_span_indices.set_shape([1, None])
     top_span_indices = tf.squeeze(top_span_indices, 0) # [k]
 
@@ -547,14 +562,14 @@ class CorefModel(object):
         predicted_cluster = len(predicted_clusters)
         predicted_clusters.append([predicted_antecedent])
         mention_to_predicted[predicted_antecedent] = predicted_cluster
-
+      
       mention = (int(top_span_starts[i]), int(top_span_ends[i]))
       predicted_clusters[predicted_cluster].append(mention)
       mention_to_predicted[mention] = predicted_cluster
 
     predicted_clusters = [tuple(pc) for pc in predicted_clusters]
     mention_to_predicted = { m:predicted_clusters[i] for m,i in mention_to_predicted.items() }
-
+      
     return predicted_clusters, mention_to_predicted
 
   def evaluate_coref(self, top_span_starts, top_span_ends, predicted_antecedents, gold_clusters, evaluator):
@@ -586,6 +601,7 @@ class CorefModel(object):
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):
       _, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _, _, _ = tensorized_example
+
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
       predicted_antecedents = self.get_predicted_antecedents(top_antecedents, top_antecedent_scores)
